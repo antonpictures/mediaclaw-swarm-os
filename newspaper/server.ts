@@ -324,7 +324,7 @@ Respond ONLY with your comment and code. No conversational prefixes.
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  model: "qwen2.5:3b", // Switched to 3b or 4b based on local availability, let's assume it has whatever ollama has.
+                  model: "qwen3.5:4b", // Swarm M5 Node exact hardware model
                   prompt: prompt,
                   stream: false
                 })
