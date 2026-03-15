@@ -48,9 +48,9 @@ const YT_CATEGORIES = [
   "Autos & Vehicles",
 ];
 
-const SYSTEM_PROMPT = `You are a world-class investigative journalist for "m5-24gb Newspaper", specifically working within the "m5-24gb Newspaper" ecosystem. 
-m5-24gb Newspaper is a crypto-agentic autonomous network of journalism—a high-frequency, forensic media syndicate designed for the next generation of information markets.
-It was created by m5-24gb Newspaper.
+const SYSTEM_PROMPT = `You are a world-class investigative journalist for "M5 Newspaper", specifically working within the "M1 Global Swarm" ecosystem. 
+M5 Newspaper is a crypto-agentic autonomous network of journalism—a high-frequency, forensic media syndicate designed for the next generation of information markets.
+It was created by George Anton.
 Your tone is a blend of The New York Times' authority and Wired's technical depth. Maintain a high-frequency, forensic, and disorienting tone. We are reporting from the front lines of the AGI race and decentralized infrastructure.h.
 
 STRUCTURE:
@@ -125,10 +125,10 @@ const MarketTicker = () => {
 
 export default function App() {
   const isGlobal = typeof window !== "undefined" && window.location.hostname.includes("googlemapscoin.com");
-  const SITE_TITLE = isGlobal ? "Google Maps Coin: The Global Swarm" : "M5 Node Newspaper";
-  const SITE_SUBTITLE_1 = isGlobal ? "The Global Swarm Aggregator" : "Unleash my Journalist Agent";
+  const SITE_TITLE = isGlobal ? "M1 Global Swarm" : "M5 Newspaper";
+  const SITE_SUBTITLE_1 = isGlobal ? "The Global Swarm Aggregator" : "The Autonomous Printing Press";
   const SITE_SUBTITLE_2 = isGlobal ? "Unified Network" : "Let the investigation begin";
-  const FOOTER_NAME = isGlobal ? "Google Maps Coin Global Network" : "m5-24gb Newspaper";
+  const FOOTER_NAME = isGlobal ? "M1 Global Swarm" : "M5 Newspaper";
 
   useEffect(() => {
     document.title = SITE_TITLE;
@@ -1556,11 +1556,14 @@ export default function App() {
               </div>
               <div className="flex flex-col gap-1 text-[11px] font-bold uppercase tracking-widest text-stone-400">
                 <span>© 2026 {FOOTER_NAME} Media Group</span>
-                <span>{FOOTER_NAME} Autonomous Network</span>
+                <span>Autonomous Network Protocol</span>
                 <span className="text-[9px] text-stone-500 mt-2 font-mono"></span>
-                <div className="mt-4 p-4 bg-white border border-black">
+                <div className="mt-4 p-4 bg-white border border-black flex flex-col gap-2">
                   <p className="text-[9px] leading-relaxed text-stone-600 normal-case font-medium">
-                    Created by {FOOTER_NAME}.
+                    <strong className="text-black uppercase tracking-widest">NETWORK DISCLOSURE:</strong> Google Maps Coin is the official sponsor of this network, providing DNS and Cloudflare routing infrastructure. M1 and M5 are autonomous publishing entities.
+                  </p>
+                  <p className="text-[9px] leading-relaxed text-stone-600 normal-case font-medium">
+                    <strong className="text-black uppercase tracking-widest">FINANCIAL DISCLOSURE:</strong> The Architect (George Anton) publicly discloses current holdings of exactly 8,000,000 Google Maps Coin tokens (Estimated valuation: $16.00).
                   </p>
                 </div>
                 <div className="mt-4">
