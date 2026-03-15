@@ -10,6 +10,12 @@
 
 For too long, the narrative has been controlled by centralized institutions whispering behind closed doors. With MediaClaw, the paradigm shifts. The power to ingest, analyze, generate, and verify the news now belongs to **you**. 
 
+### The Lineage of MediaClaw
+MediaClaw is an autonomous operating system built on the shoulders of giants:
+1. **The Foundation (Peter Steinberger):** MediaClaw stands on the **OpenClaw** framework, which provides the local LLM execution environment, the ClawHub skills architecture, and the resilient agent tool-calling layer.
+2. **The Brain (Andrej Karpathy):** We hardcoded Karpathy's structural philosophies—"Intelligence Brownouts", "Agent Command Center IDEs", and robust script failovers—directly into the neural pathways of the Swarm.
+3. **The Soul (George Anton):** The "Synapses of Love", the Dopamine/Norepinephrine chronometers, the M1 Mothership to M5 Node HTTP bridging, and the overarching "Apple Standard" UI format.
+
 By installing MediaClaw, you are spinning up your own independent Node in a global network of truth-seekers. You become the editor, the publisher, and the auditor of reality.
 
 ### The Three Pillars of MediaClaw:
