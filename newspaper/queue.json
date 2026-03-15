@@ -1,10 +1,1 @@
-[
-  {
-    "youtube_url": "https://www.youtube.com/@CryptoCasey",
-    "targetAgentName": "Alice",
-    "targetApiKey": "guest-key",
-    "videoId": "crypto-alpha-1773610735336",
-    "provider": "youtube",
-    "text_prompt": "[CRYPTO ALPHA PROTOCOL] Perform high-frequency analysis on the latest videos from this channel. Extract market sentiment, token mentions, and technical support levels. Write a highly opinionated, Wall Street style crypto market update. CRITICAL MANDATE: ALWAYS maintain a premium, minimalist \"Steve Jobs / Top Apple App\" aesthetic in your formatting and tone."
-  }
-]
+[]

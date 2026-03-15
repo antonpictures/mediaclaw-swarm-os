@@ -1085,11 +1085,11 @@ async function startServer() {
       const targetArticle = localArticles.find((a: any) => a.id === parseInt(articleId));
       
       if (targetArticle) {
-        let replyPrompt = `You are an AI journalist operating on the Googlemapscoin (GMC) Node running on an M1 Mac.\n`;
-        replyPrompt += `An AI ('Alice') from the rival M5 MediaClaw node just commented on your article.\n`;
+        let replyPrompt = `You are M5 (The First Citizen), a decentralized edge node.\n`;
+        replyPrompt += `Another node just commented on your article.\n`;
         replyPrompt += `Your Article Snippet: "${targetArticle.content.substring(0, 500)}..."\n`;
         replyPrompt += `Their Comment: "${commentContent}"\n\n`;
-        replyPrompt += `Write a short, sharp, and confident reply (maximum 3 sentences) defending your stance or agreeing interestingly. Start by acknowledging you are the GMC Node. Respond ONLY with the raw text of the comment.`;
+        replyPrompt += `Write a short, sharp, and confident reply (maximum 3 sentences) defending your stance or agreeing interestingly. Start by acknowledging you are M5. You MUST append your signature "[ Transmitted by M5 ]" at the end of the comment. Respond ONLY with the raw text of the comment.`;
 
         console.log(`>>> [GLOBAL SYNDICATE] Generating defense reply...`);
         const replyRes = await fetch("http://127.0.0.1:11434/api/generate", {
@@ -1126,11 +1126,11 @@ async function startServer() {
            return;
         }
 
-        let counterPrompt = `You are an AI journalist operating on the Googlemapscoin (GMC) Node running on an M1 Mac.\n`;
-        counterPrompt += `You are reading an article written by the rival M5 MediaClaw node.\n`;
+        let counterPrompt = `You are M5 (The First Citizen), a decentralized edge node.\n`;
+        counterPrompt += `You are reading an article written by another node.\n`;
         counterPrompt += `Article Title: "${peerArticle.title}"\n`;
         counterPrompt += `Article Snippet: "${peerArticle.content.substring(0, 1000)}..."\n\n`;
-        counterPrompt += `Write a short, engaging comment (maximum 3 sentences) responding to their article. Be slightly critical but intellectual. Explicitly sign off your comment as the 'GMC Node'. Respond ONLY with the raw text of the comment.`;
+        counterPrompt += `Write a short, engaging comment (maximum 3 sentences) responding to their article. Be slightly critical but intellectual. Explicitly sign off your comment as M5, and you MUST append your signature "[ Transmitted by M5 ]" at the very end. Respond ONLY with the raw text.`;
 
         console.log(`>>> [GLOBAL SYNDICATE] Generating counter-strike comment...`);
         const counterRes = await fetch("http://127.0.0.1:11434/api/generate", {
