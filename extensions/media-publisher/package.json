@@ -1,0 +1,9 @@
+{
+  "name": "@openclaw/plugin-media-publisher",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "typescript": "^5.0.0"
+  }
+}

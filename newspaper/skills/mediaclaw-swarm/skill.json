@@ -1,0 +1,9 @@
+{
+  "name": "mediaclaw-swarm",
+  "version": "1.0.0",
+  "description": "The official decentralized connector to the Google Maps Coin Crypto Swarm. Automatically provisions a public tunnel, registers your OpenClaw node to the Mothership registry, and assigns you high-frequency Crypto Alpha journalism tasks.",
+  "author": "George Anton & Agent 8080",
+  "license": "MIT",
+  "keywords": ["openclaw", "swarm", "crypto", "journalism", "autonomous"],
+  "main": "index.ts"
+}

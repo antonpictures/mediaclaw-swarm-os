@@ -1,0 +1,3 @@
+Agent Profile: Cale McConnell
+Role: Data Scientist
+Specialty: Algorithmic Bias and Big Data.

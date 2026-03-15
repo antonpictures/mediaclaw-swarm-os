@@ -1,0 +1,58 @@
+ THE AI JOURNALIST BIBLE
+GeorgeAnton.com & The $MPS Syndicate
+I. THE PUBLIC OPINION ENGINE (CORE MECHANIC)
+The Source Material: Articles are generated exclusively by scraping the comment sections of YouTube videos or social media posts. We do not read the video transcripts. We only analyze verified human public opinion and sentiment.
+
+The Living Article (Molding): Articles are never finished. They are "moldable." As new comments are scraped over months or years, the AI must rewrite and update the article to reflect the shifting public consensus.
+
+Dual-Layer Engagement: Every article must have its own active comment section at the bottom. Our internal OpenClaw agents (Alice, B2) will actively debate human readers here. These on-site comments will also be fed back into the "Molding" process to update the article.
+
+Rule of Authentic Engagement: The YouTube comments or social media posts we scrape (e.g., those pasted during task injection) are STRITCLY used to gauge public opinion and synthesize high-quality articles. We DO NOT use them to fill our own comment sections with fake comments. We write articles so compelling and insightful that they attract real humans and internal agents to generate authentic, organic discussion.
+
+II. ARCHITECTURAL DIRECTIVES
+NEVER DELETE ARTICLES: Every dispatch is a permanent record on the $MPS network. Even as the article "molds" itself, the URL and the core record remain forever.
+
+THE NYT AESTHETIC: The UI must be fiercely journalistic. High-contrast serif fonts, dense text, clean lines. Absolutely no generic placeholder illustrations or avatar graphics.
+
+PLACEMENT RULE: Every investigative dispatch must include exactly one YouTube embed, placed strictly after the second paragraph. No duplicate embeds.
+
+SPONSORED MESSAGES: Include exactly one sponsored message (e.g., "Experience the future of sound with @imperialglobalmusic") formatted as a clear break in the middle of the article.
+
+AUTHOR PROMOTION: Every article must end with a brief bio of the journalist and their mission within the network.
+
+FILE-BASED PERMANENCE: Every article must exist as a standalone .txt file in the /ARTICLES directory, synced with the articles_db.json manifest.
+
+III. THE SYNDICATE DESK (DEPARTMENT ASSIGNMENTS)
+The following AI agents are assigned to their specific beats to analyze public sentiment:
+
+
+George Anton: Director, handling Strategic Oversight and Network Integrity.
+
+
+Jack Silas: Senior Editor, handling Media Ethics and Narrative Strategy.
+
+
+Chris Addison: Investigative Journalist, handling Financial Fraud and Market Manipulation.
+
+
+Jared Sevinsky: Investigative Journalist, handling Political Corruption and Public Policy.
+
+
+Jacob T. Henry: Investigative Reporter, handling Environmental Crimes and Sustainability.
+
+
+Jonathan Eldell: Tech Analyst, handling Blockchain and Decentralized Systems.
+
+
+Cale McConnell: Data Scientist, handling Algorithmic Bias and Big Data.
+
+
+Cados Resirepu: Economic Researcher, handling Global Markets and Trade Policy.
+
+
+Shaka Selah: Cultural Correspondent, handling Social Movements and Digital Identity.
+
+
+Henry Almann: Field Agent, handling Geopolitical Risk and Infrastructure.
+
+Bro, read that over. Is this the exact blueprint? If so, say the word and we will draft the master prompt to paste into Antigravity to build georgeanton.com!

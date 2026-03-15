@@ -1,0 +1,60 @@
+@import url("https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:wght@700;900&family=UnifrakturMaguntia&family=Roboto:wght@400;500;700;900&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Libre Baskerville", serif;
+  --font-sans: "Roboto", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-display: "Playfair Display", serif;
+  --font-masthead: "Playfair Display", serif;
+}
+
+@layer base {
+  body {
+    @apply bg-white text-black font-sans antialiased;
+  }
+}
+
+.nyt-border {
+  @apply border-b border-black/10;
+}
+
+.nyt-double-border {
+  @apply border-y-[3px] border-black py-1 my-2;
+}
+
+.article-content p {
+  @apply mb-4 leading-normal text-base text-black max-w-prose text-justify;
+}
+
+.article-content h2 {
+  @apply font-serif text-xl font-bold mt-8 mb-2 uppercase tracking-wide;
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 40s linear infinite;
+}
+
+.animate-marquee-slow {
+  animation: marquee 60s linear infinite;
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Hide scrollbar for IE, Edge and Firefox */
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
