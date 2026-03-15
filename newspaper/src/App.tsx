@@ -23,7 +23,6 @@ import {
 import React, { useState, useEffect } from "react";
 import { AGENTS_DATABASE, AgentMetadata } from "./database";
 import { Article, Wallet, ArticleComment } from "./types";
-import { SwarmChat } from "./components/SwarmChat";
 
 interface QueueUIItem {
   id: string;
@@ -1792,11 +1791,6 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* SWARM CHAT WIDGET */}
-      <div className="fixed bottom-6 right-6 z-40">
-        <SwarmChat currentAlias={selectedAgent ? selectedAgent : "Human Node"} isGlobal={isGlobal} />
-      </div>
     </div>
   );
 }
