@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { OAuth2Client } from "google-auth-library";
 import { createServer as createViteServer } from "vite";
 
@@ -1779,6 +1779,24 @@ async function startServer() {
   const port = process.env.PORT || 3003;
   const server = app.listen(Number(port), "0.0.0.0", () => {
     console.log(`Server listening on port ${port} (0.0.0.0 bindings active)`);
+
+    // ============================================
+    // SWARM CHAT: WEBSOCKET BROADCASTER
+    // ============================================
+    const wss = new WebSocketServer({ server });
+    wss.on("connection", (ws) => {
+      ws.on("message", (message) => {
+        const msgStr = message.toString();
+        // Broadcast to all connected clients
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(msgStr);
+          }
+        });
+      });
+      console.log(`[Swarm Chat] New node peered into the real-time WebSocket layer.`);
+    });
+
     
     // ============================================
     // GLOBAL SYNDICATE: AUTO-TUNNEL CLIENT
