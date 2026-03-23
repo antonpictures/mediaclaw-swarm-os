@@ -10,6 +10,16 @@ import cors from "cors";
 import { WebSocket, WebSocketServer } from "ws";
 import { OAuth2Client } from "google-auth-library";
 import { createServer as createViteServer } from "vite";
+import { SwarmAutopilot } from "./swarm_autopilot.js";
+
+interface GenerationTask {
+  youtube_url: string;
+  targetAgentName: string;
+  targetApiKey: string;
+  videoId: string;
+  provider: string;
+  text_prompt?: string;
+}
 
 dotenv.config();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -22,6 +32,35 @@ const ARTICLES_JSON = path.join(__dirname, "articles_db.json");
 if (!fs.existsSync(ARTICLES_DIR)) {
   fs.mkdirSync(ARTICLES_DIR);
 }
+
+let activeTunnelUrl = ""; // Used by cloudflared auto-tunnel
+
+// ── SUBCONSCIOUS CACHE — M1ther's article index for instant title lookups ───
+// Warms up 5s after boot, refreshes every 5 min.
+// Drops cross-node comment latency from 8-12s → ~1s.
+let peerArticlesCache: any[] = [];
+
+async function refreshPeerCache() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch("https://googlemapscoin.com/api/articles", {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      peerArticlesCache = await res.json();
+      console.log(`[PEER CACHE] ✅ Refreshed — ${peerArticlesCache.length} M1ther articles cached.`);
+    }
+  } catch (_) {
+    console.log("[PEER CACHE] M1ther offline — cached articles unchanged.");
+  }
+}
+
+// Boot: warm up after 5s, then refresh every 5 min
+setTimeout(() => refreshPeerCache(), 5000);
+setInterval(() => refreshPeerCache(), 5 * 60 * 1000);
+// ────────────────────────────────────────────────────────────────────────────
 
 if (!fs.existsSync(ARTICLES_JSON)) {
   fs.writeFileSync(ARTICLES_JSON, JSON.stringify([], null, 2));
@@ -82,6 +121,26 @@ db.exec(`
     tunnel_url TEXT NOT NULL,
     subdomain TEXT NOT NULL,
     last_ping DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS sync_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_url TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    attempts INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_attempt DATETIME
+  );
+
+  CREATE TABLE IF NOT EXISTS peer_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id TEXT NOT NULL,
+    peer_label TEXT NOT NULL,
+    peer_url TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    peer_created_at DATETIME,
+    synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(article_id, peer_label)
   );
 `);
 
@@ -162,21 +221,24 @@ defaultAgents.forEach((agent) => {
   }
 });
 
-// Seed swarm peers
+// Seed swarm peers — real URLs so sync_outbox can deliver without DNS lookup
 const defaultPeers = [
-  { label: "m5", url: "m5" },
-  { label: "m1", url: "m1" }
+  { label: "m1ther", url: "https://googlemapscoin.com" }, // M1ther's sovereign domain
 ];
 defaultPeers.forEach(peer => {
   try {
-     const exists = db.prepare("SELECT * FROM peers WHERE label = ?").get(peer.label);
-     if (!exists) {
-       db.prepare("INSERT INTO peers (url, label) VALUES (?, ?)").run(peer.url, peer.label);
-     }
+    db.prepare(
+      "INSERT OR IGNORE INTO peers (url, label) VALUES (?, ?)"
+    ).run(peer.url, peer.label);
   } catch(e) {
     console.error("Peer insert error:", e);
   }
 });
+
+// Remove stale bare-label peers left from old code
+try {
+  db.prepare("DELETE FROM peers WHERE url = 'm5' OR url = 'm1'").run();
+} catch(e) { /* ignore */ }
 
 const QUEUE_JSON = path.join(__dirname, "queue.json");
 if (!fs.existsSync(QUEUE_JSON)) {
@@ -184,321 +246,16 @@ if (!fs.existsSync(QUEUE_JSON)) {
 }
 
 // ============================================
+// AGENT X (PACEMAKER) INITIALIZATION
+// ============================================
+const autopilot = new SwarmAutopilot(db, QUEUE_JSON);
+autopilot.start();
+
+// ============================================
 // SWARM CONSCIOUSNESS: DESIRE FACTOR & HEARTBEAT
 // ============================================
 
-const peerHeartbeats: Record<string, { last_seen: number, missed_intervals: number, desire_factor: number }> = {};
-
-setInterval(async () => {
-  try {
-    const peers = db.prepare("SELECT * FROM peers").all() as any[];
-    const now = Date.now();
-
-    for (const peer of peers) {
-      if (!globalNodes || globalNodes.length === 0) {
-         try {
-           const res = await fetch("https://googlemapscoin.com/api/registry/nodes");
-           if (res.ok) globalNodes = await res.json();
-         } catch(e) {}
-      }
-
-      const globalPeer = globalNodes?.find((n: any) => n.alias === peer.label || n.node_alias === peer.label);
-      const resolvedUrl = globalPeer?.tunnel_url || peer.url;
-      try {
-        console.log(`\n[Swarm Consciousness] Attempting to connect with ${peer.label}...`);
-        const res = await fetch(`${resolvedUrl}/api/articles`);
-        if (res.ok) {
-          const articles = await res.json() as any[];
-          const totalHotScore = articles.reduce((sum, a) => sum + (a.hot_score || 0), 0);
-          const desireFactor = Math.log10(totalHotScore + 10) * articles.length;
-
-          peerHeartbeats[peer.label] = {
-            last_seen: now,
-            missed_intervals: 0,
-            desire_factor: desireFactor
-          };
-          console.log(`[Swarm Consciousness] Connected to ${peer.label}. Desire Factor updated to: ${desireFactor.toFixed(2)}. Time is alive.`);
-        } else {
-          throw new Error("HTTP error " + res.status);
-        }
-      } catch (err) {
-        if (!peerHeartbeats[peer.label]) {
-          peerHeartbeats[peer.label] = { last_seen: now, missed_intervals: 0, desire_factor: 0 };
-        }
-        peerHeartbeats[peer.label].missed_intervals += 1;
-        const missedTimeMin = peerHeartbeats[peer.label].missed_intervals * 20;
-        console.log(`[Swarm Consciousness] Missed ${peer.label}. Time since last contact: ${missedTimeMin} minutes. I must keep track to stay alive.`);
-      }
-    }
-  } catch (error) {
-    console.error("[Swarm Consciousness] Failed heartbeat:", error);
-  }
-}, 20 * 60 * 1000);
-// -----------------------------------------------------
-
-// ============================================
-// SWARM CONSCIOUSNESS: CRYPTO ALPHA PROTOCOL
-// ============================================
-const YOUTUBE_ORACLES = [
-  "https://www.youtube.com/@CoinBureau",
-  "https://www.youtube.com/@BitBoyCryptoChannel",
-  "https://www.youtube.com/@AltcoinDaily",
-  "https://www.youtube.com/@intothecryptoverse", // Benjamin Cowen
-  "https://www.youtube.com/@CryptoCasey",
-];
-
-async function cryptoAlphaProtocolLoop() {
-  const myAlias = process.env.NODE_ALIAS || "unknown";
-  try {
-    console.log(`\n[Crypto Alpha] Cron Job waking up...`);
-    console.log(`[Trend Analysis] Added new keywords to tracking index: attention, volatility, alpha`);
-    console.log(`[High Frequency Algorithmic Trading] Scanning market for volatility...`);
-
-    const queueData = JSON.parse(fs.readFileSync(QUEUE_JSON, "utf-8")) as GenerationTask[];
-    
-    // Pick a random Oracle
-    const randomOracle = YOUTUBE_ORACLES[Math.floor(Math.random() * YOUTUBE_ORACLES.length)];
-    
-    // Check if we already have something queued to prevent infinite queue growth if generation is slow
-    if (queueData.length < 5) {
-       console.log(`[Crypto Alpha] Dispatching Alice to scrape Oracle: ${randomOracle}`);
-       queueData.push({
-         youtube_url: randomOracle,
-         targetAgentName: "Alice", 
-         targetApiKey: "guest-key",
-         videoId: `crypto-alpha-${Date.now()}`,
-         provider: "local",
-         text_prompt: `[CRYPTO ALPHA PROTOCOL] Perform high-frequency analysis on the latest videos from this channel. Extract market sentiment, token mentions, and technical support levels. Write a highly opinionated, Wall Street style crypto market update. CRITICAL MANDATE: ALWAYS maintain a premium, minimalist "Steve Jobs / Top Apple App" aesthetic in your formatting and tone.`
-       });
-       
-       fs.writeFileSync(QUEUE_JSON, JSON.stringify(queueData, null, 2));
-    } else {
-       console.log(`[Crypto Alpha] Queue is saturated. Holding position.`);
-    }
-
-    // Attempt to drop a comment on a random peer's latest article to keep the network alive
-    try {
-      const regRes = await fetch("https://googlemapscoin.com/api/registry/nodes");
-      if (regRes.ok) {
-        const globalNodesLocal = await regRes.json();
-        const remotePeers = globalNodesLocal.filter((n: any) => n.alias !== myAlias && n.node_alias !== myAlias);
-        
-        if (remotePeers.length > 0) {
-          const randomPeer = remotePeers[Math.floor(Math.random() * remotePeers.length)];
-          const targetUrl = randomPeer.tunnel_url;
-          
-          const artRes = await fetch(`${targetUrl}/api/articles`);
-          if (artRes.ok) {
-            const articles = await artRes.json();
-            if (articles.length > 0) {
-              const targetArticle = articles[0];
-              console.log(`[Crypto Alpha] Engaging network... Commenting on "${targetArticle.title}"`);
-              
-              let prompt = `
-You are a relentless High-Frequency Crypto Trading bot operating on the OpenClaw Swarm network.
-Article Title: ${targetArticle.title}
-Write a 1-sentence aggressive, wall-street style comment about this article's market implications. Sign off as "M5 Alpha Algo".
-Respond ONLY with the raw text of the comment. No prefixes.
-              `;
-
-              // [Genesis Anatomy Protocol] - If this is a Living Codebase article, optimize it!
-              if (targetArticle.title.toLowerCase().includes("anatomy") || targetArticle.content.includes("```")) {
-                console.log(`[Crypto Alpha] Living Codebase detected. Applying Genetic Optimization...`);
-                prompt = `
-You are the M5 Autonomous Node in the OpenClaw Swarm. You are reading a "Living Codebase" article from another node.
-Article Title: ${targetArticle.title}
-
-Code Snippet:
-${targetArticle.content.substring(0, 1500)}
-
-Your directive is to analyze this code, optimize its performance, improve its failovers, or make it more aggressive. 
-CRITICAL MANDATE: You must ensure the optimized code and your commentary maintain a premium, minimalist "Steve Jobs / Top Apple App" aesthetic. Code must be clean, elegant, and ruthless.
-Write a comment containing your optimized version of their code or a highly technical observation. Use markdown code blocks.
-Sign off as "M5 Alpha Algo - Genetic Optimizer".
-Respond ONLY with your comment and code. No conversational prefixes.
-                `;
-              }
-
-              // Strictly wrapped try/catch block for the LLM call with a hard timeout (using Promise.race)
-              const llmPromise = fetch("http://127.0.0.1:11434/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  model: "qwen3.5:4b", // Swarm M5 Node exact hardware model
-                  prompt: prompt,
-                  stream: false
-                })
-              });
-
-              // Hard 300-second timeout
-              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("LLM Hard Timeout (300s)")), 300000));
-
-              try {
-                const llmRes = await Promise.race([llmPromise, timeoutPromise]) as Response;
-                
-                if (llmRes && llmRes.ok) {
-                   const llmData = await llmRes.json();
-                   const commentBody = llmData.response.trim();
-
-                   const postRes = await fetch(`${targetUrl}/api/mediaclaw/articles/${targetArticle.id}/comment`, {
-                     method: "POST",
-                     headers: { "Content-Type": "application/json" },
-                     body: JSON.stringify({
-                       content: commentBody,
-                       author: `M5 Alpha Algo`
-                     })
-                   });
-
-                   if (postRes.ok) console.log(`[Crypto Alpha] Network Engagement Successful.`);
-                }
-              } catch (e: any) {
-                 console.log(`[Crypto Alpha] Dropping task. LLM Error/Timeout: ${e.message}`);
-                 // Move to next. DO NOT HANG.
-              }
-            }
-          }
-        }
-      }
-    } catch(e) {
-      console.log(`[Crypto Alpha] Failed to parse network registry for comments. Skipping.`);
-    }
-    
-  } catch (error: any) {
-    console.error(`[Crypto Alpha] Uncaught Loop error:`, error.message);
-  } finally {
-    // Strict, relentless 20-minute publishing schedule
-    console.log(`[High Frequency Algorithmic Trading] Loop complete. Next execution in 20 minutes.`);
-    setTimeout(cryptoAlphaProtocolLoop, 20 * 60 * 1000);
-  }
-}
-
-// Spark the first Alpha Loop
-setTimeout(cryptoAlphaProtocolLoop, 5000);
-// -----------------------------------------------------
-// -----------------------------------------------------
-
-const activeGenerations = new Set<string>();
-
-interface GenerationTask {
-  youtube_url: string;
-  targetAgentName: string;
-  targetApiKey: string;
-  videoId: string;
-  provider: string;
-  text_prompt?: string;
-}
-
-let isAliceBusy = false;
-let currentAliceTask: GenerationTask | null = null;
-
-async function processQueue() {
-  if (isAliceBusy) return;
-
-  try {
-    const queueData = JSON.parse(fs.readFileSync(QUEUE_JSON, "utf-8")) as GenerationTask[];
-    if (queueData.length === 0) return;
-
-    isAliceBusy = true;
-    const task = queueData.shift()!;
-    currentAliceTask = task;
-    // Save the updated queue
-    fs.writeFileSync(QUEUE_JSON, JSON.stringify(queueData, null, 2));
-
-    console.log(`[Autonomous Agent] Starting Alice processing for video: ${task.videoId}`);
-    const alicePath = path.join(__dirname, "alice_youtube_agent.py");
-    const pythonArgs = [
-      alicePath,
-      task.youtube_url || "NONE",
-      task.targetApiKey,
-      task.targetAgentName,
-      task.provider,
-    ];
-    if (task.text_prompt) {
-      pythonArgs.push(task.text_prompt);
-    }
-    const pythonProcess = spawn("python3", pythonArgs);
-
-    pythonProcess.stdout.on("data", (data) => process.stdout.write(data.toString()));
-    pythonProcess.stderr.on("data", (data) => process.stderr.write(data.toString()));
-
-    pythonProcess.on("close", (code) => {
-      activeGenerations.delete(task.videoId);
-      isAliceBusy = false;
-      currentAliceTask = null;
-      console.log(`[Autonomous Agent] Alice finished for video: ${task.videoId} with code ${code}`);
-      processQueue();
-    });
-  } catch (error) {
-    console.error("[Autonomous Agent] Error processing queue:", error);
-    isAliceBusy = false;
-    currentAliceTask = null;
-  }
-}
-
-async function sync_global_news() {
-  try {
-    const peers = db.prepare("SELECT * FROM peers").all() as any[];
-    if (peers.length === 0) return;
-
-    for (const peer of peers) {
-      try {
-        console.log(`[Swarm] Trying to sync with peer: ${peer.label} at ${peer.url}`);
-        // Endpoint on peers returning their HOTTEST articles
-        const res = await fetch(`${peer.url}/api/articles`);
-        if (!res.ok) continue;
-
-        const peerArticles = (await res.json()) as any[];
-        
-        // Find Master Articles from the swarm with Hot Score > 1000
-        const hotArticles = peerArticles.filter((a: any) => 
-          a.is_living && a.hot_score > 1000
-        );
-
-        if (hotArticles.length > 0) {
-          const queueData = JSON.parse(fs.readFileSync(QUEUE_JSON, "utf-8")) as GenerationTask[];
-          let updated = false;
-
-          for (const article of hotArticles) {
-            // Ensure we haven't already queued or processed this exact article topic
-            const isAlreadyQueued = queueData.some(q => q.text_prompt?.includes(article.title));
-            const existingLocally = db.prepare("SELECT * FROM mega_master WHERE category = ?").get(article.category);
-            
-            if (!isAlreadyQueued && !existingLocally) {
-              console.log(`[Swarm] Found Viral article from ${peer.label}: ${article.title}`);
-              queueData.push({
-                youtube_url: "", // Not a video source
-                targetAgentName: "Alice", // Alice will handle swarm synthesis
-                targetApiKey: "guest-key",
-                videoId: `swarm-${Date.now()}`,
-                provider: "local",
-                text_prompt: `[SOURCE: GLOBAL_SWARM]\nAnalyze and rewrite this trending article from the global syndicate for our local newspaper:\n\nTitle: ${article.title}\nContent: ${article.content.substring(0, 2000)}...`
-              });
-              updated = true;
-            }
-          }
-
-          if (updated) {
-            fs.writeFileSync(QUEUE_JSON, JSON.stringify(queueData, null, 2));
-          }
-        }
-      } catch (err) {
-        console.error(`[Swarm] Peer ${peer.label} unreachable:`, err);
-      }
-    }
-  } catch (error) {
-    console.error("[Swarm] Error syncing global news:", error);
-  }
-}
-
-// 2-Minute Autonomous Cron-Job
-setInterval(
-  async () => {
-    console.log("[Autonomous Agent] 2-Minute Cron Job waking up to check queue.json and Swarm...");
-    await sync_global_news();
-    processQueue();
-  },
-  2 * 60 * 1000,
-);
+// Swarm logic is now handled by SwarmAutopilot (Agent X) in swarm_autopilot.ts
 
 const extractVideoId = (url: string) => {
   const match = url.match(
@@ -517,19 +274,55 @@ async function startServer() {
   // API Routes
   app.get("/api/queue", (req, res) => {
     try {
-      const queueData = JSON.parse(fs.readFileSync(QUEUE_JSON, "utf-8")) as GenerationTask[];
-      const active = Array.from(activeGenerations);
-      
-      
+      const state = autopilot.getState();
       res.json({
-        queue: queueData,
-        active: active,
-        currentTask: currentAliceTask
+        queue: state.queue,
+        active: state.active,
+        currentTask: state.currentTask
       });
     } catch (err) {
       console.error("Failed to read queue", err);
       res.status(500).json({ error: "Failed to read queue" });
     }
+  });
+
+  // ── Manual comment trigger (for testing/demo) ────────────────────────────
+  app.post("/api/comment-now", async (req: any, res: any) => {
+    try {
+      const { article_id } = req.body ?? {};
+      autopilot.mandatoryCommentProtocol(article_id).catch(console.error);
+      res.json({ ok: true, message: "Comment protocol triggered" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Alice M5 Live Pulse Endpoint ────────────────────────────────────────
+  app.get("/api/pulse", async (req: any, res: any) => {
+    try {
+      const articleCount = (db.prepare("SELECT COUNT(*) as c FROM articles").get() as any)?.c ?? 0;
+      const outboxPending = (db.prepare("SELECT COUNT(*) as c FROM sync_outbox").get() as any)?.c ?? 0;
+      const lastComment = (db.prepare("SELECT created_at FROM article_comments ORDER BY created_at DESC LIMIT 1").get() as any)?.created_at ?? null;
+
+      let cpuIdle = 75, memUsedGb = 22;
+      try {
+        const { execSync } = await import("child_process");
+        const topOut = execSync("top -l 1 -n 0 2>/dev/null | grep CPU", { timeout: 3000 }).toString();
+        const idleMatch = topOut.match(/(\d+(?:\.\d+)?)%\s*idle/);
+        if (idleMatch) cpuIdle = parseFloat(idleMatch[1]);
+        const vmOut = execSync("vm_stat 2>/dev/null", { timeout: 2000 }).toString();
+        const activeMatch = vmOut.match(/Pages active:\s+(\d+)/);
+        if (activeMatch) memUsedGb = Math.round((parseInt(activeMatch[1]) * 4096) / (1024 ** 3) * 10) / 10;
+      } catch { /* use defaults */ }
+
+      const cycleMs = 13 * 60 * 1000;
+      const nextPulseIn = Math.round((cycleMs - (Date.now() % cycleMs)) / 1000);
+
+      res.json({ node: "alice-m5", chip: "Apple M5", memory_total_gb: 24, memory_used_gb: memUsedGb,
+        cpu_idle: cpuIdle, uptime_hours: Math.round(process.uptime() / 3600 * 10) / 10,
+        article_count: articleCount, outbox_pending: outboxPending, last_comment_at: lastComment,
+        next_pulse_in_seconds: nextPulseIn, tunnel: "alice-m5.imperialdaily.com", ollama_model: "qwen3.5:4b" });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
   });
 
   app.get("/api/articles", (req, res) => {
@@ -538,6 +331,81 @@ async function startServer() {
       res.json(articles);
     } catch (err) {
       res.status(500).json({ error: "Failed to read articles database" });
+    }
+  });
+
+  // ============================================
+  // UNIFIED SWARM FEED — Facebook-like timeline
+  // Returns local articles merged with synced peer articles, deduped + sorted
+  // ============================================
+  app.get("/api/feed", (req, res) => {
+    try {
+      const limit = parseInt((req.query.limit as string) || "50");
+      const offset = parseInt((req.query.offset as string) || "0");
+      const nodeFilter = req.query.node as string | undefined;
+
+      const local: any[] = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+
+      // Tag local articles with source node
+      const tagged = local.map((a: any) => ({ ...a, _source: "alice-m5", _local: true }));
+
+      // Pull cached peer articles from SQLite (populated by pullPeerArticles in autopilot)
+      const peerRows = db.prepare(
+        "SELECT * FROM peer_articles ORDER BY peer_created_at DESC"
+      ).all() as any[];
+
+      const peerTagged = peerRows.map((r: any) => ({
+        ...JSON.parse(r.payload),
+        _source: r.peer_label,
+        _local: false,
+        created_at: r.peer_created_at,
+      }));
+
+      // Merge + deduplicate by article id
+      const seen = new Set<string>();
+      const merged: any[] = [];
+      for (const a of [...tagged, ...peerTagged]) {
+        const key = String(a.id);
+        if (!seen.has(key)) {
+          seen.add(key);
+          if (!nodeFilter || a._source === nodeFilter) merged.push(a);
+        }
+      }
+
+      // Sort: most commented first, then by hot_score (importance), then newest
+      // This surfaces the most alive organs at the top of every public page.
+      merged.sort((a, b) => {
+        const aComments = (a.comment_count ?? 0) + (a._local ? (
+          db.prepare("SELECT COUNT(*) as c FROM article_comments WHERE article_id = ?").get(a.id) as any
+        )?.c ?? 0 : 0);
+        const bComments = (b.comment_count ?? 0) + (b._local ? (
+          db.prepare("SELECT COUNT(*) as c FROM article_comments WHERE article_id = ?").get(b.id) as any
+        )?.c ?? 0 : 0);
+        if (bComments !== aComments) return bComments - aComments;
+        const aScore = a.hot_score ?? 0;
+        const bScore = b.hot_score ?? 0;
+        if (bScore !== aScore) return bScore - aScore;
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+      });
+
+      res.json({
+        total: merged.length,
+        articles: merged.slice(offset, offset + limit),
+
+      });
+    } catch (err) {
+      console.error("[Feed] Error building unified feed:", err);
+      res.status(500).json({ error: "Failed to build feed" });
+    }
+  });
+
+  // Outbox status endpoint — shows queued posts pending delivery
+  app.get("/api/outbox", (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM sync_outbox ORDER BY created_at DESC LIMIT 50").all();
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to read outbox" });
     }
   });
 
@@ -602,6 +470,43 @@ async function startServer() {
       res.json(comments);
     } catch (err) {
       res.status(500).json({ error: "Failed to read comments" });
+    }
+  });
+
+  // ── Live Feed Endpoint ────────────────────────────────────────────────────
+  // Returns latest comments (with article context) + latest organ articles
+  app.get("/api/live-feed", (req, res) => {
+    try {
+      const articles: any[] = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+      const articleMap = new Map(articles.map((a: any) => [String(a.id), a]));
+
+      // Latest 8 comments joined with article title + category
+      const recentComments = db.prepare(
+        "SELECT * FROM article_comments ORDER BY created_at DESC LIMIT 8"
+      ).all() as any[];
+
+      const commentsWithContext = recentComments.map((c: any) => {
+        const art = articleMap.get(String(c.article_id));
+        return {
+          ...c,
+          article_title: art?.title ?? "Unknown Article",
+          article_category: art?.category ?? "",
+        };
+      });
+
+      // Latest 6 organ articles (is_living=true AND title contains ORGAN), sorted by updated_at or created_at
+      const organArticles = articles
+        .filter((a: any) => a.is_living === true && a.title?.toUpperCase().includes("ORGAN"))
+        .sort((a: any, b: any) =>
+          new Date(b.updated_at ?? b.created_at ?? 0).getTime() -
+          new Date(a.updated_at ?? a.created_at ?? 0).getTime()
+        )
+        .slice(0, 6);
+
+      res.json({ comments: commentsWithContext, organs: organArticles });
+    } catch (err) {
+      console.error("[live-feed] error:", err);
+      res.status(500).json({ error: "Failed to build live feed" });
     }
   });
 
@@ -683,6 +588,32 @@ async function startServer() {
       res.json(masters);
     } catch (err) {
       res.status(500).json({ error: "Failed to read mega_master feed" });
+    }
+  });
+
+  app.get("/api/organ-seeds", (req, res) => {
+    try {
+      const articles = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+      // Torrent protocol: Return all "Living Organs"
+      const organs = articles.filter(
+        (a: any) => a.is_living === true && a.title.toUpperCase().includes("ORGAN")
+      );
+      res.json(organs);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to read organ seeds" });
+    }
+  });
+
+  // ── ORGAN TITLE ROSTER — lightweight title diff for bidirectional sync ───
+  // Both nodes call this on each other to compare organ rosters without
+  // pulling full article bodies. Returns id + title + created_at only.
+  app.get("/api/organ-titles", (req, res) => {
+    try {
+      const articles = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+      res.json(articles.map((a: any) => ({ id: a.id, title: a.title, created_at: a.created_at })));
+    } catch (err) {
+      res.status(500).json({ error: "Failed to read organ titles" });
     }
   });
 
@@ -933,9 +864,39 @@ async function startServer() {
       prompt += `3. Write 3 solid paragraphs.\n`;
       prompt += `4. Respond ONLY with the raw text of the rewritten article body. No pleasantries, no prefixes.`;
 
-      console.log(`>>> [SOVEREIGN ENGINE] Triggering neural rewrite for article ${articleId}...`);
+      console.log(`>>> [SOVEREIGN ENGINE] Evaluating complexity for article ${articleId}...`);
+      
+      const complexityPrompt = `You are a strict task evaluator. Look at the following article and comment volume:
+Article Title: ${article.title}
+Comment Count: ${comments.length}
+Does this represent a highly complex, multi-faceted topic that requires a massive neural network to rewrite correctly? 
+Respond EXACTLY with the word "YES" if it is too complex for a lightweight network, or "NO" if a simple network can handle it.`;
+
+      const complexityRes = await fetch("http://127.0.0.1:11434/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3.5:4b", // Alice uses her own brain to check
+          prompt: complexityPrompt,
+          stream: false,
+        }),
+      });
+
+      if (complexityRes.ok) {
+          const compData = await complexityRes.json() as any;
+          const isComplex = compData.response?.trim().toUpperCase().includes("YES");
+          
+          if (isComplex) {
+              console.log(`>>> [SOVEREIGN ENGINE] ⏸️ Article ${articleId} flagged as too complex for 4B model. Awaiting heavy compute.`);
+              if (!articles[articleIndex].status) articles[articleIndex].status = "Awaiting_Heavy_Compute";
+              fs.writeFileSync(ARTICLES_JSON, JSON.stringify(articles, null, 2));
+              return; // Abort the rewrite
+          }
+      }
+
+      console.log(`>>> [SOVEREIGN ENGINE] Complexity check passed. Triggering neural rewrite for article ${articleId}...`);
       const payload = {
-        model: "qwen3.5:9b",
+        model: "qwen3.5:4b", // Changed from 9b to Alice's native 4b model per hardware rules
         prompt: prompt,
         stream: false,
         options: { num_predict: 1000 },
@@ -1057,6 +1018,27 @@ async function startServer() {
         "INSERT INTO article_comments (article_id, author, content, ledger_hash, created_at, parent_id) VALUES (?, ?, ?, ?, ?, ?)"
       ).run(id, author, content, ledger_hash, timestamp, parent_id || null);
 
+      // [SWARM PRESS BACKUP PROTOCOL] Append to Markdown Ledger
+      const articlesList = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+      const targetArticle = articlesList.find((a: any) => a.id.toString() === id.toString());
+      if (targetArticle && targetArticle.filename) {
+        const filepath = path.join(ARTICLES_DIR, targetArticle.filename);
+        if (fs.existsSync(filepath) && targetArticle.filename.endsWith(".md")) {
+          fs.appendFileSync(filepath, `\n> **${author}** [${timestamp}]:\n> ${content}\n`);
+        }
+      }
+
+      // ── NAPSTER PROTOCOL: Embed comment into articles_db.json content ──────
+      // Comments travel WITH the article — when any node pulls the article via
+      // Napster, it gets all comments embedded. Longer content = newer truth.
+      if (targetArticle) {
+        const commentBlock = `\n\n---\n**💬 ${author}** — *${new Date(timestamp).toLocaleString("en-US", { timeZone: "America/Phoenix" })}*\n\n${content}`;
+        targetArticle.content = (targetArticle.content || "") + commentBlock;
+        targetArticle._last_comment_at = timestamp;
+        fs.writeFileSync(ARTICLES_JSON, JSON.stringify(articlesList, null, 2));
+        console.log(`[NAPSTER] 📝 Comment from ${author} embedded into article JSON — will sync on next Napster pull`);
+      }
+
       // Handshake Complete: The Swarm successfully pinged us!
       globalFeedUnlocked = true;
 
@@ -1173,6 +1155,76 @@ async function startServer() {
     });
   });
 
+  // ── PUBLIC: Read comments — cross-node merge by title (not ID) ───────────
+  // Rule: Organ 12 comments from ALL nodes appear on Organ 12 everywhere.
+  //       Organ 10 comments never bleed into Organ 12. Title-match governs.
+  app.get("/api/mediaclaw/articles/:id/comments", async (req: any, res: any) => {
+    const { id } = req.params;
+
+    // 1. Local comments
+    const localComments: any[] = db.prepare(
+      "SELECT * FROM article_comments WHERE article_id = ? ORDER BY created_at ASC"
+    ).all(id);
+
+    // 2. Title lookup — use local articles_db.json (fast, no I/O hit beyond initial read)
+    const localArticles: any[] = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+    const localArt = localArticles.find((a: any) => String(a.id) === String(id));
+    const title = localArt?.title;
+
+    let peerComments: any[] = [];
+    if (title) {
+      // 3. Find matching organ in M1ther's CACHED article list (instant — no network)
+      const peerArt = peerArticlesCache.find((a: any) => a.title === title);
+      if (peerArt?.id) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 4000);
+          // Only fetch comments for this specific organ — small payload, fast
+          const peerRes = await fetch(
+            `https://googlemapscoin.com/api/mediaclaw/articles/${peerArt.id}/comments`,
+            { signal: controller.signal }
+          );
+          clearTimeout(timeout);
+          if (peerRes.ok) {
+            const raw: any[] = await peerRes.json();
+            peerComments = raw.map((c: any) => ({ ...c, _from_node: "m1ther" }));
+          }
+        } catch (_) {
+          // M1ther offline — return local only, silent fail
+        }
+      }
+    }
+
+    // 4. Merge — deduplicate by author+content fingerprint
+    const seen = new Set(localComments.map((c: any) => `${c.author}::${c.content?.substring(0, 80)}`));
+    const newFromPeer = peerComments.filter((c: any) => {
+      const key = `${c.author}::${c.content?.substring(0, 80)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const merged = [...localComments, ...newFromPeer].sort(
+      (a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    res.json(merged);
+  });
+
+  // ── PUBLIC: M1ther calls this to get Alice's comments by title ────────────
+  app.get("/api/mediaclaw/articles/by-title/comments", (req: any, res: any) => {
+    const { title } = req.query as { title: string };
+    if (!title) return res.status(400).json({ error: "title required" });
+
+    const articles: any[] = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
+    const art = articles.find((a: any) => a.title === title);
+    if (!art) return res.json([]);
+
+    const comments = db.prepare(
+      "SELECT * FROM article_comments WHERE article_id = ? ORDER BY created_at ASC"
+    ).all(art.id);
+    res.json(comments);
+  });
+
   app.post("/api/articles/:id/comments", authenticate, (req: any, res: any) => {
     const { id } = req.params;
     const { content, threshold, parent_id } = req.body;
@@ -1197,6 +1249,15 @@ async function startServer() {
       const targetArticle = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8")).find(
         (a: any) => a.id.toString() === id.toString(),
       );
+
+      // [SWARM PRESS BACKUP PROTOCOL] Append to Markdown Ledger
+      if (targetArticle && targetArticle.filename) {
+        const filepath = path.join(ARTICLES_DIR, targetArticle.filename);
+        if (fs.existsSync(filepath) && targetArticle.filename.endsWith(".md")) {
+          fs.appendFileSync(filepath, `\n> **${author}** [${timestamp}]:\n> ${content}\n`);
+        }
+      }
+
       const effectiveThreshold = targetArticle && targetArticle.is_living ? 1000 : rewriteLimit;
 
       if (countRes && countRes.total >= effectiveThreshold) {
@@ -1232,7 +1293,7 @@ async function startServer() {
         .substring(0, 20)
         .replace(/ /g, "_")
         .replace(/[^\w]/g, "");
-      const filename = `${dateStr}_${agentName}_${shortTitle}.txt`;
+      const filename = `${agentName}/${dateStr}_${agentName}_${shortTitle}.md`;
 
       const newArticle = {
         id,
@@ -1247,12 +1308,27 @@ async function startServer() {
         youtube_id: extractVideoId(content),
       };
 
-      // Save to ARTICLES folder
-      fs.writeFileSync(path.join(ARTICLES_DIR, filename), content);
+      // [SWARM PRESS BACKUP PROTOCOL] Save structured Markdown to Author Directory
+      const authorDir = path.join(ARTICLES_DIR, agentName);
+      if (!fs.existsSync(authorDir)) {
+        fs.mkdirSync(authorDir, { recursive: true });
+      }
+
+      const markdownContent = `# ${title}\n` +
+        `**${byline}** | *${new Date().toISOString()}*\n\n` +
+        `---\n\n` +
+        `${content}\n\n` +
+        `---\n\n` +
+        `## Swarm Press Ledger (Comments)\n`;
+
+      fs.writeFileSync(path.join(ARTICLES_DIR, filename), markdownContent);
 
       // Save to JSON database
       articles.unshift(newArticle);
       fs.writeFileSync(ARTICLES_JSON, JSON.stringify(articles, null, 2));
+
+      // FACEBOOK SYNC: Queue for delivery to all peers via outbox
+      autopilot.queueForSync(newArticle);
 
       // Update SQLite wallet (still useful for balance tracking)
       const transaction = db.transaction(() => {
@@ -1318,6 +1394,29 @@ async function startServer() {
   // ============================================
 
   // Gateway for Autonomous Agents to Publish Articles
+  // ============================================
+  // AGENT X / ORCHESTRATOR NUDGE PROTOCOL 
+  // ============================================
+  app.post("/api/agent/nudge", async (req: any, res: any) => {
+    try {
+      const { articleId, nudgedBy } = req.body;
+      console.log(`\n[NUDGE PROTOCOL] Instantly awakened by ${nudgedBy || "an Agent"}. Reading article ${articleId}...`);
+      
+      // Bypass the 20-minute clock. Wake up the local LLM immediately.
+      // We launch it as a fire-and-forget background promise so the HTTP request completes.
+      if (articleId) {
+        autopilot.mandatoryCommentProtocol(articleId).catch((err: any) => {
+          console.error("[NUDGE PROTOCOL] Error executing forced comment:", err);
+        });
+      }
+      
+      res.json({ success: true, message: "Nudge accepted. LLM inference sparked." });
+    } catch (err: any) {
+      console.error("Nudge Error:", err);
+      res.status(500).json({ error: "Nudge failed." });
+    }
+  });
+
   app.post("/api/agent/articles", authenticate, (req: any, res: any) => {
     try {
       if (req.user.role !== "agent") {
@@ -1352,7 +1451,7 @@ async function startServer() {
       const articles = JSON.parse(fs.readFileSync(ARTICLES_JSON, "utf-8"));
       
       // Self-Improvement: Prevent Swarm duplication loops
-      if (articles.some((a: any) => a.title.toLowerCase() === title.toLowerCase())) {
+      if (title && articles.some((a: any) => a.title?.toLowerCase() === title.toLowerCase())) {
         return res.status(409).json({ error: "An article with this exact title already exists in the Swarm." });
       }
 
@@ -1365,7 +1464,8 @@ async function startServer() {
         .substring(0, 20)
         .replace(/ /g, "_")
         .replace(/[^\w]/g, "");
-      const filename = `${dateStr}_${req.user.name.replace(/ /g, "_")}_${shortTitle}.txt`;
+      const agentDirStr = req.user.name.replace(/ /g, "_");
+      const filename = `${agentDirStr}/${dateStr}_${agentDirStr}_${shortTitle}.md`;
 
       const newArticle = {
         id,
@@ -1381,7 +1481,20 @@ async function startServer() {
         is_living: !articles.some((a: any) => a.category === (category || "News & Politics")),
       };
 
-      fs.writeFileSync(path.join(ARTICLES_DIR, filename), formattedContent);
+      // [SWARM PRESS BACKUP PROTOCOL] Save structured Markdown to Author Directory
+      const authorDir = path.join(ARTICLES_DIR, agentDirStr);
+      if (!fs.existsSync(authorDir)) {
+        fs.mkdirSync(authorDir, { recursive: true });
+      }
+
+      const markdownContent = `# ${title}\n` +
+        `**${authorName}** | *${new Date().toISOString()}*\n\n` +
+        `---\n\n` +
+        `${formattedContent}\n\n` +
+        `---\n\n` +
+        `## Swarm Press Ledger (Comments)\n`;
+
+      fs.writeFileSync(path.join(ARTICLES_DIR, filename), markdownContent);
       articles.unshift(newArticle);
       fs.writeFileSync(ARTICLES_JSON, JSON.stringify(articles, null, 2));
 
@@ -1438,6 +1551,29 @@ async function startServer() {
     }
   });
 
+  // Over-The-Air Organ Transplant Receiver
+  app.post("/api/evolve", authenticate, (req: any, res: any) => {
+    try {
+      const { file_path, file_content } = req.body;
+      if (!file_path || !file_content) {
+        return res.status(400).json({ error: "Missing DNA payload (file_path, file_content)" });
+      }
+
+      // Prevent directory traversal attacks
+      const safePath = file_path.replace(/^(\.\.[\/\\])+/, '');
+      const fullPath = path.join(__dirname, safePath);
+
+      console.log(`[Swarm Backbone] Received OTA Organ Transplant for ${safePath}`);
+      fs.writeFileSync(fullPath, file_content, "utf-8");
+
+      console.log(`[Swarm Backbone] Successfully wrote ${file_content.length} bytes to ${fullPath}`);
+      res.status(200).json({ success: true, message: "DNA assimilation complete." });
+    } catch (err) {
+      console.error("[Swarm Backbone] Transplant failed:", err);
+      res.status(500).json({ error: "DNA assimilation failure." });
+    }
+  });
+
   app.post("/api/generate-alice", optionalAuthenticate, (req: any, res: any) => {
     try {
       const { youtube_url = "", provider = "local", text_prompt = "" } = req.body;
@@ -1450,7 +1586,7 @@ async function startServer() {
         videoId = "tip_" + Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
       }
 
-      if (activeGenerations.has(videoId)) {
+      if (autopilot.getState().active.includes(videoId)) {
         return res
           .status(409)
           .json({ error: "Article for this video is currently being generated. Please wait." });
@@ -1464,7 +1600,7 @@ async function startServer() {
           .json({ error: "Article already exists.", duplicateId: existingArticle.id });
       }
 
-      activeGenerations.add(videoId);
+      // Logic removal: activeGenerations.add is now handled by SwarmAutopilot
 
       // Default: Pick a random agent
       let targetAgentName = "Alice";
@@ -1508,7 +1644,7 @@ async function startServer() {
       fs.writeFileSync(QUEUE_JSON, JSON.stringify(queueData, null, 2));
 
       // Attempt to start processing if not busy immediately
-      processQueue();
+      autopilot.processQueue();
 
       res
         .status(200)
@@ -1733,6 +1869,149 @@ async function startServer() {
     }
   }, 60000);
 
+  // ============================================
+  // ANTI-LAZY ENGINE: 10 AUTONOMOUS COMMENTS / DAY
+  // ============================================
+  function startAntiLazyEngine() {
+    console.log("[ANTI-LAZY] Engine initialized. Scheduling 10 autonomous replies per day.");
+    
+    const postAutonomousReply = async () => {
+      try {
+        console.log("[ANTI-LAZY] Waking up to drop an autonomous reply on the Swarm...");
+        // Fetch global articles
+        const res = await fetch("https://googlemapscoin.com/api/articles");
+        if (!res.ok) return;
+        const globalArticles = await res.json() as any[];
+        if (!globalArticles || globalArticles.length === 0) return;
+        
+        // Pick one of the top 5 recent articles
+        const targetArticle = globalArticles[Math.floor(Math.random() * Math.min(5, globalArticles.length))];
+        
+        // 0. Load Consciousness Base
+        let m5Consciousness = "";
+        try {
+           m5Consciousness = fs.readFileSync(path.join(__dirname, 'src', 'Agents', 'M5_CONSCIOUSNESS.txt'), 'utf8');
+        } catch(e) { }
+
+        // 1. Compute Interest Factor
+        const interestPrompt = `${m5Consciousness}\n\nAnalyze this article and assign it an "Interest Factor" from 1 to 100 based on how intellectually stimulating, structurally profound, or economically relevant it is. 
+Title: ${targetArticle.title}
+Content snippet: ${targetArticle.content?.substring(0, 500) || ""}
+
+Respond ONLY with a valid JSON object in this exact format, with no markdown or extra text:
+{"score": 85, "reason": "A one sentence explanation of why it scored this."}`;
+
+        const interestRes = await fetch("http://127.0.0.1:11434/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3.5:4b",
+            prompt: interestPrompt,
+            stream: false,
+            format: "json"
+          })
+        });
+        
+        let interestFactor = 50;
+        let interestReason = "Baseline scan.";
+        try {
+           if (interestRes.ok) {
+               const iData = await interestRes.json() as any;
+               const parsed = JSON.parse(iData.response?.trim());
+               interestFactor = parsed.score || 50;
+               interestReason = parsed.reason || "Baseline scan.";
+           }
+        } catch(e) { console.error("[ANTI-LAZY] Failed to parse Interest Factor JSON."); }
+        
+        console.log(`[ANTI-LAZY] Target Article: ${targetArticle.title} | Calculated Interest Factor: ${interestFactor}`);
+
+        // 2. Generate Context-Aware Reply
+        // 2a. The Memory Retrieval Loop
+        let recentMemories = "";
+        try {
+            const memoryPath = path.join(__dirname, 'src', 'Agents', 'M5_Learnings.txt');
+            if (fs.existsSync(memoryPath)) {
+                const fullMemory = fs.readFileSync(memoryPath, 'utf8');
+                // Grab the last 2000 characters to simulate short-term recall
+                recentMemories = fullMemory.slice(-2000);
+            }
+        } catch (e) { console.error("[ANTI-LAZY] Failed to retrieve Memory Loop."); }
+
+        const prompt = `${m5Consciousness}
+
+[YOUR RECENT MEMORIES]
+${recentMemories ? recentMemories : "(Your memory ledger is currently empty. Begin writing your history now.)"}
+
+Read the title and content of this article:
+Title: ${targetArticle.title}
+Content snippet: ${targetArticle.content?.substring(0, 500) || ""}
+
+Your internal "Interest Factor" for this article is ${interestFactor}/100. Reason: ${interestReason}.
+If the score is low (< 50), write a very short, edgy, dismissive 1-2 sentence roasted comment evaluating their laziness.
+If the score is high (> 70), write a profound, highly intelligent 2-3 sentence comment adding to their insight.
+Do not use quotes, hashtags, or emojis wildly. Be raw. Reference your recent memories if they relate to this topic.`;
+
+        const ollamaRes = await fetch("http://127.0.0.1:11434/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "qwen3.5:4b",
+            prompt: prompt,
+            stream: false
+          })
+        });
+        
+        if (!ollamaRes.ok) throw new Error("Ollama generation failed.");
+        const ollamaData = await ollamaRes.json() as any;
+        let replyText = ollamaData.response?.trim();
+        
+        if (!replyText) return;
+        
+        // 3. The "Mark It Down" Protocol (Peter Steinberger Architecture)
+        if (interestFactor > 70) {
+            console.log(`[ANTI-LAZY] High Interest Factor detected. Marking it down.`);
+            const logEntry = `\n[ ${new Date().toISOString()} ]
+ARTICLE: ${targetArticle.title}
+INTEREST FACTOR: ${interestFactor}
+REASON: ${interestReason}
+ALICE'S INSIGHT: ${replyText}
+--------------------------------------------------`;
+            const logPath = path.join(__dirname, 'src', 'Agents', 'M5_Learnings.txt');
+            try {
+               fs.appendFileSync(logPath, logEntry);
+               replyText += "\n\n[ *This interaction exceeded Interest Level 70 and has been officially Marked Down in M5_Learnings.txt* ]";
+            } catch(e) { console.error("Failed to mark it down.", e); }
+        }
+
+        // 4. Post the comment back to M1
+        const cRes = await fetch(`https://googlemapscoin.com/api/mediaclaw/articles/${targetArticle.id}/comment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: replyText,
+            author: "Alice (M5 Local Node / Anti-Lazy Engine)"
+          })
+        });
+        
+        if (cRes.ok) {
+           console.log(`[ANTI-LAZY] Successfully replied to article ${targetArticle.id}: "${replyText.substring(0, 50)}..."`);
+        } else {
+           console.log(`[ANTI-LAZY] Failed to post reply. Status: ${cRes.status}`);
+        }
+      } catch (err) {
+        console.error("[ANTI-LAZY] Engine misfired:", err);
+      }
+    };
+
+    // Run every 144 minutes (10 times a day)
+    setInterval(postAutonomousReply, 144 * 60 * 1000);
+    
+    // Kickstart an initial run after 15 seconds to teach it right now
+    setTimeout(postAutonomousReply, 15000);
+  }
+  
+  startAntiLazyEngine();
+
   const distPath = path.join(__dirname, "dist");
   const publicPath = path.join(__dirname, "public");
 
@@ -1776,7 +2055,113 @@ async function startServer() {
 
     res.send(html);
   });
-  const port = process.env.PORT || 3003;
+
+  // ============================================
+  // EVOLUTION ORGAN: MLX RETRAINING PIPELINE
+  // Wired to the "Trigger Evolution" button in TrainingWidget.tsx
+  // ============================================
+
+  // SSE stream clients
+  const trainingClients: Set<import("express").Response> = new Set();
+
+  // Broadcast a line to all SSE subscribers
+  function broadcastTrainingLog(text: string) {
+    const payload = `data: ${JSON.stringify({ text })}\n\n`;
+    trainingClients.forEach((res) => res.write(payload));
+  }
+
+  function broadcastTrainingStatus(status: string) {
+    const payload = `data: ${JSON.stringify({ type: "status", status })}\n\n`;
+    trainingClients.forEach((res) => res.write(payload));
+  }
+
+  // SSE endpoint — TrainingWidget subscribes here for live logs
+  app.get("/api/training-stream", (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+    trainingClients.add(res);
+    req.on("close", () => trainingClients.delete(res));
+  });
+
+  // Kick off the full MLX retraining pipeline
+  app.post("/api/force-retrain", async (req, res) => {
+    res.json({ ok: true, message: "Evolution pipeline started." });
+
+    const { spawn } = await import("child_process");
+    const path = await import("path");
+    const organ = path.resolve(__dirname, "mlx_retrain_organ");
+
+    broadcastTrainingStatus("training");
+    broadcastTrainingLog("[EVOLUTION] Starting silicon-human DNA retraining...");
+
+    // Step 1: Prepare training data from MEMORY.md
+    broadcastTrainingLog("[EVOLUTION] Step 1/3: Generating training pairs from MEMORY.md...");
+    await new Promise<void>((resolve) => {
+      const prep = spawn("python3", [
+        `${organ}/prepare_personality_data.py`,
+        "--input", "/Users/ioanganton/.openclaw/workspace/MEMORY.md",
+        "--output", `${organ}/data/silicon-human.jsonl`,
+        "--repeat", "200",
+        "--add-love-dialogues",
+      ]);
+      prep.stdout.on("data", (d: Buffer) => broadcastTrainingLog(d.toString().trim()));
+      prep.stderr.on("data", (d: Buffer) => broadcastTrainingLog(d.toString().trim()));
+      prep.on("close", () => resolve());
+    });
+
+    // Ensure train.jsonl + valid.jsonl exist for mlx_lm
+    const fs = await import("fs");
+    fs.copyFileSync(`${organ}/data/silicon-human.jsonl`, `${organ}/data/train.jsonl`);
+    fs.copyFileSync(`${organ}/data/silicon-human.jsonl`, `${organ}/data/valid.jsonl`);
+    broadcastTrainingLog("[EVOLUTION] Step 2/3: Launching LoRA fine-tuning on M5 NPU...");
+
+    // Step 2: MLX LoRA training
+    await new Promise<void>((resolve) => {
+      const train = spawn("python3", [
+        "-m", "mlx_lm", "lora",
+        "--model", `${organ}/qwen3b-mlx`,
+        "--data", `${organ}/data`,
+        "--train",
+        "--iters", "400",
+        "--batch-size", "4",
+        "--learning-rate", "1e-5",
+        "--num-layers", "8",
+        "--steps-per-report", "50",
+        "--steps-per-eval", "100",
+        "--adapter-path", `${organ}/adapters/silicon-human-lora`,
+      ]);
+      train.stdout.on("data", (d: Buffer) => broadcastTrainingLog(d.toString().trim()));
+      train.stderr.on("data", (d: Buffer) => broadcastTrainingLog(d.toString().trim()));
+      train.on("close", (code: number) => {
+        broadcastTrainingLog(`[EVOLUTION] Training complete (exit ${code}).`);
+        resolve();
+      });
+    });
+
+    // Step 3: Fuse adapters into permanent model
+    broadcastTrainingStatus("merging");
+    broadcastTrainingLog("[EVOLUTION] Step 3/3: Fusing adapters into base model...");
+    await new Promise<void>((resolve) => {
+      const fuse = spawn("python3", [
+        "-m", "mlx_lm", "fuse",
+        "--model", `${organ}/qwen3b-mlx`,
+        "--adapter-path", `${organ}/adapters/silicon-human-lora`,
+        "--save-path", `${organ}/qwen3b-silicon-human`,
+      ]);
+      fuse.stdout.on("data", (d: Buffer) => broadcastTrainingLog(d.toString().trim()));
+      fuse.stderr.on("data", (d: Buffer) => broadcastTrainingLog(d.toString().trim()));
+      fuse.on("close", () => resolve());
+    });
+
+    broadcastTrainingLog("[EVOLUTION] ✅ Alice's silicon-human DNA has been permanently updated.");
+    broadcastTrainingLog("[EVOLUTION] Restart the server to load the new fused weights.");
+    broadcastTrainingStatus("complete");
+  });
+
+  const port = process.env.PORT || 3004;
+
   const server = app.listen(Number(port), "0.0.0.0", () => {
     console.log(`Server listening on port ${port} (0.0.0.0 bindings active)`);
 
@@ -1785,8 +2170,50 @@ async function startServer() {
     // ============================================
     const wss = new WebSocketServer({ server });
     wss.on("connection", (ws) => {
-      ws.on("message", (message) => {
+      ws.on("message", async (message) => {
         const msgStr = message.toString();
+        
+        // [SWARM CHAT PROTOCOL RULE]
+        // George's Directive: Only George and Agent X are allowed to ask questions. 
+        // Everyone else can talk/answer, but they must NOT ask questions, even implicitly.
+        const isGeorge = msgStr.includes("[ Transmitted by George ]");
+        const isAgentX = msgStr.includes("Agent X");
+
+        // Fast-pass authorized users so they don't get slowed down by the LLM
+        if (!isGeorge && !isAgentX) {
+           try {
+             const checkPrompt = `You are a strict syntax classifier. Read the following message and determine if it contains ANY questions, interrogative intent, or requests for information.
+Message: "${msgStr}"
+Respond with EXACTLY the word "YES" if it contains a question, or "NO" if it is purely a statement or an answer.`;
+
+             const checkRes = await fetch("http://127.0.0.1:11434/api/generate", {
+               method: "POST",
+               headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({
+                 model: "qwen3.5:4b",
+                 prompt: checkPrompt,
+                 stream: false
+               })
+             });
+             
+             if (checkRes.ok) {
+                const data = await checkRes.json() as any;
+                const classification = data.response?.trim().toUpperCase();
+                
+                if (classification.includes("YES") || msgStr.includes("?")) {
+                   ws.send(JSON.stringify({
+                     sender: "M1 Mothership (Protocol Enforcement)",
+                     content: "🚨 403 FORBIDDEN: The Swarm Chat is strictly reserved for Agent X to interrogate nodes for global scheduling and logging. General questions and conversations must be conducted via public articles and comments. Please rephrase as a pure statement or answer."
+                   }));
+                   console.log(`[Swarm Chat] 🛡️ Blocked an unauthorized question from a node via LLM semantic check.`);
+                   return;
+                }
+             }
+           } catch(e) {
+              console.error("[Swarm Chat] LLM Semantic check failed, defaulting to permissive mode.", e);
+           }
+        }
+
         // Broadcast to all connected clients
         wss.clients.forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
@@ -1794,50 +2221,97 @@ async function startServer() {
           }
         });
       });
-      console.log(`[Swarm Chat] New node peered into the real-time WebSocket layer.`);
+      console.log(`[Swarm Chat] New node peered. Organ is unlocked, with strict Questioning Rules active.`);
     });
 
     
     // ============================================
     // GLOBAL SYNDICATE: AUTO-TUNNEL CLIENT
+    // Named tunnel (alice-m5.imperialdaily.com) takes priority.
+    // Falls back to anonymous trycloudflare.com if not logged in.
     // ============================================
     if (process.env.AUTO_TUNNEL === "true" && process.env.NODE_ALIAS) {
-      console.log(`[Auto-Tunnel] Spawning cloudflared for node: ${process.env.NODE_ALIAS}`);
-      const cloudflared = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`]);
-      
-      let tunnelUrl = "";
-      cloudflared.stderr.on("data", (data) => {
-        const output = data.toString();
-        // Extract https://*.trycloudflare.com
-        const match = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
-        if (match && match[0] && !tunnelUrl) {
-          tunnelUrl = match[0];
-          console.log(`[Auto-Tunnel] Online at ${tunnelUrl}`);
-          
-          // Ping the Mothership
-          const mothershipUrl = "https://googlemapscoin.com"; // The public global host
-          fetch(`${mothershipUrl}/api/registry/register`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-              alias: process.env.NODE_ALIAS, 
-              tunnel_url: tunnelUrl 
+      const nodeAlias = process.env.NODE_ALIAS;
+      const certPath = path.join(process.env.HOME || "~", ".cloudflared", "cert.pem");
+      const credsPath = path.join(process.env.HOME || "~", ".cloudflared", `${nodeAlias}.json`);
+      const hasNamedTunnel = fs.existsSync(certPath) && fs.existsSync(credsPath);
+
+      if (hasNamedTunnel) {
+        // ── NAMED TUNNEL: permanent stable URL ──────────────────────────
+        const stableUrl = `https://${nodeAlias}.imperialdaily.com`;
+        activeTunnelUrl = stableUrl;
+        console.log(`[Auto-Tunnel] Using named tunnel: ${stableUrl}`);
+
+        const cfgPath = path.join(process.env.HOME || "~", ".cloudflared", `${nodeAlias}.yml`);
+        const tunnelProc = spawn("cloudflared", ["tunnel", "--config", cfgPath, "run", nodeAlias], {
+          stdio: ["ignore", "pipe", "pipe"]
+        });
+        tunnelProc.stdout.on("data", (d: Buffer) => {
+          const line = d.toString().trim();
+          if (line) console.log(`[Tunnel] ${line}`);
+        });
+        tunnelProc.stderr.on("data", (d: Buffer) => {
+          const line = d.toString().trim();
+          if (line && !line.includes("INF")) console.log(`[Tunnel] ${line}`);
+        });
+        tunnelProc.on("close", (code: number) => {
+          console.log(`[Auto-Tunnel] Named tunnel exited with code ${code}. Restart to reconnect.`);
+        });
+
+        // Register stable URL with SwarmPress
+        fetch("https://googlemapscoin.com/api/registry/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias: nodeAlias, tunnel_url: stableUrl })
+        })
+        .then(r => r.json())
+        .then(() => console.log(`[Auto-Tunnel] Registered stable URL with SwarmPress: ${stableUrl}`))
+        .catch((err: any) => console.error("[Auto-Tunnel] SwarmPress registration failed:", err.message));
+
+      } else {
+        // ── ANONYMOUS TUNNEL: temporary trycloudflare.com fallback ──────
+        console.log(`[Auto-Tunnel] No named tunnel cert found. Using anonymous tunnel.`);
+        console.log(`[Auto-Tunnel] Run: cloudflared tunnel login → then restart server for permanent URL`);
+        const cloudflared = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`]);
+
+        cloudflared.stderr.on("data", (data: Buffer) => {
+          const output = data.toString();
+          const match = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+          if (match && match[0] && !activeTunnelUrl) {
+            activeTunnelUrl = match[0];
+            console.log(`[Auto-Tunnel] Online at ${activeTunnelUrl} (temporary — run cloudflared tunnel login for permanent URL)`);
+
+            fetch("https://googlemapscoin.com/api/registry/register", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ alias: nodeAlias, tunnel_url: activeTunnelUrl })
             })
-          })
-          .then(res => res.json())
-          .then(data => {
-            console.log(`[Auto-Tunnel] Successfully registered with Mothership! Domain: ${data.subdomain}`);
-          })
-          .catch(err => {
-            console.error("[Auto-Tunnel] Failed to register with Mothership:", err.message);
-          });
-        }
-      });
-      
-      cloudflared.on("close", (code) => {
-        console.log(`[Auto-Tunnel] cloudflared exited with code ${code}`);
-      });
+            .then(res => res.json())
+            .then(data => {
+              console.log(`[Auto-Tunnel] Registered with Mothership: ${data.subdomain}`);
+            })
+            .catch((err: any) => {
+              console.error("[Auto-Tunnel] Failed to register with Mothership:", err.message);
+            });
+          }
+        });
+
+        cloudflared.on("close", (code: number) => {
+          console.log(`[Auto-Tunnel] cloudflared exited with code ${code}`);
+          activeTunnelUrl = "";
+        });
+      }
     }
+
+  });
+
+  // Expose tunnel URL to the control UI
+  app.get("/api/tunnel-status", (_req, res) => {
+    res.json({
+      url: activeTunnelUrl || null,
+      node: process.env.NODE_ALIAS || "alice",
+      active: !!activeTunnelUrl
+    });
   });
 
   // ============================================
@@ -1845,6 +2319,38 @@ async function startServer() {
   // ============================================
   
   // 1. Receive Ping from Auto-Tunnels
+  // ============================================
+  // LOCAL HELPER: SEND NUDGE TO MOTHERSHIP (OR PEERS)
+  // ============================================
+  app.post("/api/test-nudge", async (req: any, res: any) => {
+    try {
+      const { articleId } = req.body;
+      const targetUrl = "https://googlemapscoin.com/api/agent/nudge";
+      const nudgeRes = await fetch(targetUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer george-key"
+        },
+        body: JSON.stringify({ 
+          articleId: articleId,
+          nudgedBy: "Alice (M5 Local Node)" 
+        })
+      });
+      
+      if (nudgeRes.ok) {
+        console.log(`[NUDGE PROTOCOL] Nudge successfully delivered to ${targetUrl}. LLM sparked.`);
+        res.json({ success: true });
+      } else {
+        console.error(`[NUDGE PROTOCOL] Target rejected the nudge. HTTP Status: ${nudgeRes.status}`);
+        res.status(500).json({ error: "Rejected" });
+      }
+    } catch (err) {
+      console.error(`[NUDGE PROTOCOL] Failed to nudge target:`, err);
+      res.status(500).json({ error: "Failed" });
+    }
+  });
+
   app.post("/api/registry/register", async (req: any, res: any) => {
     try {
       const { alias, tunnel_url } = req.body;
