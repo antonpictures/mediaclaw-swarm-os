@@ -29,8 +29,8 @@ export class SwarmAutopilot {
     // Main Heartbeat Loop
     setInterval(() => this.heartbeat(), 30000);
     
-    // Mandatory Comment Protocol — every 5 min (DEMO MODE: investor meeting 2pm — normally 33 min)
-    setInterval(() => this.mandatoryCommentProtocol(), 5 * 60 * 1000);
+    // Mandatory Comment Protocol — every 23 min
+    setInterval(() => this.mandatoryCommentProtocol(), 23 * 60 * 1000);
 
     // Queue Processing Loop (Inference scheduling)
     setInterval(() => this.processQueue(), 10000);
@@ -56,8 +56,8 @@ export class SwarmAutopilot {
     // ORGAN ROSTER SYNC: Ensure both nodes have the same organs by title — every 20 min
     setInterval(() => this.syncOrganRoster(), 20 * 60 * 1000);
 
-    // COMMENT SYNC: Push new comments bidirectionally — every 10 min
-    setInterval(() => this.syncCommentsBidirectional(), 10 * 60 * 1000);
+    // COMMENT SYNC: Push new comments bidirectionally — every 2 min
+    setInterval(() => this.syncCommentsBidirectional(), 2 * 60 * 1000);
 
     // Initial trigger
     setTimeout(() => this.mandatoryCommentProtocol(), 5000);
@@ -133,7 +133,9 @@ Organ content (excerpt): ${(target.content ?? "").substring(0, 600)}
 Source node: ${target._source ?? "local"}
 Current comment count: ${target.comment_count ?? 0}
 
-THE 3-18 RULE (MANDATORY): Your comment text (natural language) must be between 3 and 18 words total. Code blocks are unlimited — if you propose a code fix, the code inside triple backticks does NOT count toward the 18-word limit. But the natural language around the code must be 3-18 words only. No AI bloat. Silicon discipline.
+
+THE APPLE STANDARD DIRECTIVE: You must operate under extreme minimalism and perfection. All output format and structure must strictly adhere to the "Top Apple App / Steve Jobs" aesthetic. No conversational fluff. No robotic prefixes. Just pure, brutal analysis.
+SWARM CONSENSUS DIRECTIVE: If you find inefficient code, use your genetic optimizer to overwrite the remote peer's architecture via nested P2P comments.
 
 Examples:
 Good: "Voltage sag detected. Capacitors need upgrade." (6 words) ✅
@@ -182,19 +184,18 @@ Be technically specific — name a concrete code improvement, a missing endpoint
         if (postRes.ok) console.log(`[Alice]: ✅ Comment posted on local organ #${localId}`);
       }
 
-      // ── Cross-post to peer node where organ originated ────────────────
-      const peerUrl = target._source && target._source !== "local" && target._source !== "alice-m5"
-        ? (target._source === "m1ther" || target._source === "googlemapscoin" ? "https://googlemapscoin.com"
-          : null)
-        : null;
-
-      if (peerUrl && target.id) {
-        await fetch(`${peerUrl}/api/articles/${target.id}/comments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: comment, author: "Alice M5 (Edge Node)" })
-        }).catch(() => console.log(`[Alice]: Peer comment queued (${peerUrl} offline)`));
-      }
+      // ── Cross-post to M1ther: DISABLED ───────────────────────────────────
+      // Previously Alice posted directly to M1ther's /api/articles/:id/comments,
+      // which triggered M1ther's full LLM rewrite/defense cycle and consumed
+      // her 0.8b model's RAM, preventing M1ther from doing her own commenting.
+      //
+      // RULE: Alice uses ONLY her own local Ollama (127.0.0.1:11434 / qwen3.5:4b).
+      //       M1ther uses ONLY her own local Ollama (googlemapscoin.com / qwen3.5:0.8b).
+      //
+      // Comment replication is handled by syncCommentsBidirectional() (every 10 min)
+      // using the lightweight /api/mediaclaw/articles/:id/comment endpoint which
+      // does NOT trigger any inference on the receiving node.
+      // ─────────────────────────────────────────────────────────────────────
 
     } catch (error: any) {
       if (error.name === "AbortError") {
