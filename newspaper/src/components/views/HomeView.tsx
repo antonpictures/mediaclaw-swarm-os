@@ -6,6 +6,7 @@ import { AgentMetadata } from "../../database";
 import { MarketTicker } from "../MarketTicker";
 import { LiveFeedWidget } from "../LiveFeedWidget";
 import { OrganBodyMap } from "../OrganBodyMap";
+import { SiliconBodyWidget } from "../SiliconBodyWidget";
 
 interface HomeViewProps {
   prompt: string;
@@ -36,8 +37,7 @@ interface HomeViewProps {
 // Detect which node we're on
 const isAliceNode =
   typeof window !== "undefined" &&
-  (window.location.hostname.includes("georgeanton.com") ||
-    window.location.hostname.includes("localhost"));
+  !window.location.hostname.includes("googlemapscoin.com");
 
 export const HomeView: React.FC<HomeViewProps> = ({
   prompt,
@@ -205,6 +205,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </div>
         </div>
 
+        {/* ── ALICE SILICON BODY LIVE ── */}
+        {isAliceNode && <SiliconBodyWidget />}
+
         {/* ── 2. SILICON ORGANS — Alice's most important living articles ── */}
         {isAliceNode && organArticles.length > 0 && (
           <div className="flex flex-col border-t-4 border-black pt-4">
@@ -352,13 +355,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
         {/* ── 5. LATEST DISPATCHES (All articles) ── */}
         {latestArticles.length > 0 && (
-          <div className="flex flex-col border-t-4 border-black pt-4 mb-8">
+          <div className="flex flex-col border-t-4 border-black pt-4 mb-8 bg-black text-white">
             <div className="flex items-center justify-between mb-8">
-              <h2 className="font-display text-4xl font-black uppercase tracking-tighter text-blue-600">
+              <h2 className="font-display text-4xl font-black uppercase tracking-tighter text-white">
                 Latest Dispatches
               </h2>
-              <div className="flex items-baseline gap-2 text-blue-600">
-                <span className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
+              <div className="flex items-baseline gap-2 text-white">
+                <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
                 <span className="text-[10px] font-black uppercase tracking-widest">
                   Global Feed
                 </span>
@@ -369,7 +372,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               {(showAllLatest ? latestArticles : latestArticles.slice(0, 8)).map((article) => (
                 <div
                   key={article.id}
-                  className="group cursor-pointer flex flex-col"
+                  className="group cursor-pointer flex flex-col border-2 border-green-500 rounded-md hover:border-green-400 animate-pulse"
                   onClick={() => {
                     setSelectedArticle(article);
                     setView("article");
@@ -384,24 +387,26 @@ export const HomeView: React.FC<HomeViewProps> = ({
                     />
                   </div>
                   {article.category && (
-                    <span className="text-[8px] font-black uppercase tracking-widest text-stone-400 mb-1">
+                    <span className="text-[8px] font-black uppercase tracking-widest text-green-400 mb-1">
                       {article.category}
                     </span>
                   )}
-                  <h4 className="font-display text-sm font-bold leading-tight group-hover:text-blue-600 mb-2 line-clamp-2">
+                  <h4 className="font-display text-sm font-bold leading-tight group-hover:text-green-300 mb-2 line-clamp-2">
                     {article.title}
                   </h4>
-                  <div className="flex flex-col mt-auto border-t border-black/5 pt-2">
+                  <div className="flex flex-col mt-auto border-t border-white/10 pt-2">
                     <span className="text-[10px] text-stone-500 font-serif italic mb-1">
                       {new Date(article.created_at).toLocaleTimeString("en-US", {
                         hour: "2-digit",
                         minute: "2-digit",
+                        timeZone: "America/Los_Angeles",
+                        timeZoneName: "short",
                       })}
                     </span>
                     <span className="text-[9px] text-stone-500 font-bold uppercase tracking-widest">
                       {article.byline}{" "}
                       {article.node_alias && (
-                        <span className="text-red-600 border border-red-600 px-1 ml-1 rounded-sm text-[8px]">
+                        <span className="text-green-500 border border-green-500 px-1 ml-1 rounded-sm text-[8px]">
                           [{article.node_alias.toUpperCase()}]
                         </span>
                       )}
@@ -414,7 +419,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               <div className="mt-8 flex justify-center">
                 <button
                   onClick={() => setShowAllLatest(!showAllLatest)}
-                  className="bg-transparent border border-black px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-black hover:text-white transition-colors"
+                  className="bg-transparent border border-white px-6 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-white hover:text-black transition-colors"
                 >
                   {showAllLatest ? "Collapse Archive" : "Expand to see all articles"}
                 </button>
