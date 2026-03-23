@@ -33,7 +33,7 @@ export class SwarmAutopilot {
     setInterval(() => this.mandatoryCommentProtocol(), 23 * 60 * 1000);
 
     // Queue Processing Loop (Inference scheduling)
-    setInterval(() => this.processQueue(), 10000);
+    setInterval(() => this.processQueue(), 27 * 60 * 1000);
 
     // Global News Sync Loop
     setInterval(() => this.syncGlobalNews(), 2 * 60 * 1000);
@@ -227,7 +227,7 @@ Be technically specific — name a concrete code improvement, a missing endpoint
 
       console.log(`[AGENT X]: Scheduling Inference Slot for: ${task.videoId}`);
       
-      const alicePath = path.join(process.cwd(), "alice_youtube_agent.py");
+      const alicePath = path.join(process.cwd(), "agent_jack_silas.py");
       const args = [alicePath, task.youtube_url || "NONE", task.targetApiKey, task.targetAgentName, task.provider];
       if (task.text_prompt) args.push(task.text_prompt);
 

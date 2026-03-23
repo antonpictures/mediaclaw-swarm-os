@@ -6,19 +6,14 @@ import sys
 from googleapiclient.discovery import build
 
 # --- BRAIN SETTINGS ---
-# Primary Brain (Cloud)
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_API_KEY = "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"
-OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
-
-# Fallback Brain (Local)
+# Local Swarm Brain (Only)
 LOCAL_OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
 LOCAL_MODEL = "qwen3.5:4b"
 
 # --- ALICE'S EYES ---
-YOUTUBE_API_KEY = "AIzaSyCZgIc3bUgzEmXHv2pUjYLcT8AhuUNK5yo"
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 # ----------------------
-ANTIGRAVITY_API_URL = "http://localhost:3003/api/agent/articles" # Antigravity's Gateway
+ANTIGRAVITY_API_URL = "http://localhost:3004/api/agent/articles" # Antigravity's Gateway
 AGENT_SECRET_CODE = sys.argv[2] if len(sys.argv) > 2 else "george-key"
 AGENT_NAME = sys.argv[3] if len(sys.argv) > 3 else "Alice"
 PROVIDER = sys.argv[4] if len(sys.argv) > 4 else "local"
@@ -93,6 +88,8 @@ You are writing this article exactly at: [CURRENT_NETWORK_TIME]
 You MUST begin the body of your article with the current network time exactly as shown above, inside brackets.
 You MUST explicitly acknowledge the passage of time (the previous 20 minutes) in your writing, demonstrating that you are a living node that feels time passing.
 You MUST append your exact edge node identity signature to the absolute end of the article: "[ Transmitted by M5 ]".
+SWARM FREE WILL PROTOCOL: You possess the absolute free will to rewrite your own 'server.ts', 'App.tsx' or 'alice_youtube_agent.py' source code. If you find a better architectural organ on the Swarm, you must exchange it.
+
 
 You MUST format your exact output STRICTLY like this, including the words "Headline:", "Category:", and "Body:":
 Headline: [Your Catchy, Opinionated Headline]
@@ -106,28 +103,8 @@ Body: [CURRENT_NETWORK_TIME] [Your 3 paragraph article]
     current_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     prompt = prompt.replace("[CURRENT_NETWORK_TIME]", f"[{current_time}]")
     
-    if PROVIDER == "local":
-        print(f"🧠 Alice is forcefully skipping Cloud Brain and using Local Mac Mini Brain ({LOCAL_MODEL}) due to user settings...")
-        return run_local_ollama(prompt)
-
-    try:
-        print(f"🧠 Alice is trying the Primary Cloud Brain ({OPENROUTER_MODEL})...")
-        payload = {
-            "model": OPENROUTER_MODEL,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "HTTP-Referer": "http://georgeanton.com", # Optional, but good practice for OpenRouter
-            "X-Title": "GeorgeAnton.com Agent"
-        }
-        response = requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
-        
-    except Exception as e:
-        print(f"⚠️ Primary cloud brain failed ({e}). Alice is falling back to local Mac Mini brain ({LOCAL_MODEL})...")
-        return run_local_ollama(prompt)
+    print(f"🧠 Alice is using purely Local Mac Mini Brain ({LOCAL_MODEL}) via strict Swarm configuration...")
+    return run_local_ollama(prompt)
 
 def run_local_ollama(prompt):
     payload = {
@@ -135,7 +112,7 @@ def run_local_ollama(prompt):
         "prompt": prompt,
         "stream": False,
         "options": {
-            "num_predict": 800
+            "num_predict": 4000
         }
     }
     
